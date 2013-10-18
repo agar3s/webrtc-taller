@@ -12,121 +12,151 @@
 
 <body>
 
-	<video id="myVideo" autoplay muted controls></video>
-	<video id="remoteVideo" autoplay muted controls></video>
+	<textarea id="dataChannelSend" disabled placeholder="Click en empezar, ingrese algun texto y luego click en enviar."></textarea>
+	<textarea id="dataChannelReceive" disabled></textarea>
 
-	<div>
+	<div id="buttons">
 		<button id="startButton">Empezar</button>
-		<button id="callButton">Llamar</button>
-		<button id="hangupButton">Colgar</button>
+		<button id="sendButton">Enviar</button>
+		<button id="closeButton">Detener</button>
 	</div>
 
 	<script>
-		var localStream, localPeerConnection, remotePeerConnection;
-
-		var myVideo = document.getElementById("myVideo");
-		var remoteVideo = document.getElementById("remoteVideo");
+		var sendChannel, receiveChannel;
 
 		var startButton = document.getElementById("startButton");
-		var callButton = document.getElementById("callButton");
-		var hangupButton = document.getElementById("hangupButton");
+		var sendButton = document.getElementById("sendButton");
+		var closeButton = document.getElementById("closeButton");
 		startButton.disabled = false;
-		callButton.disabled = true;
-		hangupButton.disabled = true;
-		startButton.onclick = start;
-		callButton.onclick = call;
-		hangupButton.onclick = hangup;
+		sendButton.disabled = true;
+		closeButton.disabled = true;
+		startButton.onclick = createConnection;
+		sendButton.onclick = sendData;
+		closeButton.onclick = closeDataChannels;
 
 		function trace(text) {
 			console.log((performance.now() / 1000).toFixed(3) + ": " + text);
 		}
 
-		function gotStream(stream){
-			trace("Stream local recibido");
-			myVideo.src = window.URL.createObjectURL(stream);
-			localStream = stream;
-			callButton.disabled = false;
-		}
-
-		function start() {
-			trace("Solicitando stream local");
-			startButton.disabled = true;
-			navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
-			navigator.getUserMedia({video:true, audio:true}, 
-									gotStream,
-									function(error) {
-										trace("navigator.getUserMedia error: ", error);
-									});
-		}
-
-		function call() {
-			callButton.disabled = true;
-			hangupButton.disabled = false;
-			trace("Comenzando llamada");
-
-			if (localStream.getVideoTracks().length > 0) {
-				trace('Usando el dispositivo de video: ' + localStream.getVideoTracks()[0].label);
-			}
-			if (localStream.getAudioTracks().length > 0) {
-				trace('Usando el dispositivo de audio: ' + localStream.getAudioTracks()[0].label);
-			}
-
+		function createConnection() {
 			var servers = null;
+			window.localPeerConnection = new webkitRTCPeerConnection(servers,
+				{optional: [{RtpDataChannels: true}]});
+			trace('Creado: local peer connection object localPeerConnection');
 
-			localPeerConnection = new webkitRTCPeerConnection(servers);
-			trace("Creado peer local: localPeerConnection");
-			localPeerConnection.onicecandidate = gotLocalIceCandidate;
+			try {
+				// Reliable Data Channels not yet supported in Chrome
+				sendChannel = localPeerConnection.createDataChannel("sendDataChannel",
+					{reliable: false});
+				trace('Canal de envio de datos creado.');
+			} catch (e) {
+				alert('Fallo al crear canal de datos. ' +
+							'Necesitas Chrome M25 o posterior con RtpDataChannel enabled');
+				trace('createDataChannel() failed with exception: ' + e.message);
+			}
+			localPeerConnection.onicecandidate = gotLocalCandidate;
+			sendChannel.onopen = handleSendChannelStateChange;
+			sendChannel.onclose = handleSendChannelStateChange;
 
-			remotePeerConnection = new webkitRTCPeerConnection(servers);
-			trace("Creado peer remoto: remotePeerConnection");
+			window.remotePeerConnection = new webkitRTCPeerConnection(servers,
+				{optional: [{RtpDataChannels: true}]});
+			trace('Creado: remote peer connection object remotePeerConnection');
+
 			remotePeerConnection.onicecandidate = gotRemoteIceCandidate;
-			remotePeerConnection.onaddstream = gotRemoteStream;
+			remotePeerConnection.ondatachannel = gotReceiveChannel;
 
-			localPeerConnection.addStream(localStream);
-			trace("se ha agregado localStream a localPeerConnection");
 			localPeerConnection.createOffer(gotLocalDescription);
+			startButton.disabled = true;
+			closeButton.disabled = false;
 		}
 
-		function gotLocalDescription(description){
-			localPeerConnection.setLocalDescription(description);
-			trace("Oferta desde localPeerConnection: \n" + description.sdp);
-			remotePeerConnection.setRemoteDescription(description);
-			remotePeerConnection.createAnswer(gotRemoteDescription);
+		function sendData() {
+			var data = document.getElementById("dataChannelSend").value;
+			sendChannel.send(data);
+			trace('Sent data: ' + data);
 		}
 
-		function gotRemoteDescription(description){
-			remotePeerConnection.setLocalDescription(description);
-			trace("Respuesta desde remotePeerConnection: \n" + description.sdp);
-			localPeerConnection.setRemoteDescription(description);
-		}
-
-		function hangup() {
-			trace("terminando llamada");
+		function closeDataChannels() {
+			trace('Cerrando los canales de datos');
+			sendChannel.close();
+			trace('Cerrando los canales de datos con etiqueta: ' + sendChannel.label);
+			receiveChannel.close();
+			trace('canales de datos cerrados con etiqueta: ' + receiveChannel.label);
 			localPeerConnection.close();
 			remotePeerConnection.close();
 			localPeerConnection = null;
 			remotePeerConnection = null;
-			hangupButton.disabled = true;
-			callButton.disabled = false;
+			trace('Cerrado conexiones de puntos');
+			startButton.disabled = false;
+			sendButton.disabled = true;
+			closeButton.disabled = true;
+			dataChannelSend.value = "";
+			dataChannelReceive.value = "";
+			dataChannelSend.disabled = true;
+			dataChannelSend.placeholder = "Click en empezar, ingrese algún texto y luego presione enviar.";
 		}
 
-		function gotRemoteStream(event){
-			remoteVideo.src = URL.createObjectURL(event.stream);
-			trace("Stream remoto recibido");
+		function gotLocalDescription(desc) {
+			localPeerConnection.setLocalDescription(desc);
+			trace('Oferta desde localPeerConnection \n' + desc.sdp);
+			remotePeerConnection.setRemoteDescription(desc);
+			remotePeerConnection.createAnswer(gotRemoteDescription);
 		}
 
-		function gotLocalIceCandidate(event){
+		function gotRemoteDescription(desc) {
+			remotePeerConnection.setLocalDescription(desc);
+			trace('Respuesta desde remotePeerConnection \n' + desc.sdp);
+			localPeerConnection.setRemoteDescription(desc);
+		}
+
+		function gotLocalCandidate(event) {
+			trace('local ice callback');
 			if (event.candidate) {
-				remotePeerConnection.addIceCandidate(new RTCIceCandidate(event.candidate));
-				trace("Local ICE candidate: \n" + event.candidate.candidate);
+				remotePeerConnection.addIceCandidate(event.candidate);
+				trace('Local ICE candidate: \n' + event.candidate.candidate);
 			}
 		}
 
-		function gotRemoteIceCandidate(event){
+		function gotRemoteIceCandidate(event) {
+			trace('remote ice callback');
 			if (event.candidate) {
-				localPeerConnection.addIceCandidate(new RTCIceCandidate(event.candidate));
-				trace("Remote ICE candidate: \n " + event.candidate.candidate);
+				localPeerConnection.addIceCandidate(event.candidate);
+				trace('Remote ICE candidate: \n ' + event.candidate.candidate);
 			}
+		}
+
+		function gotReceiveChannel(event) {
+			trace('Receive Channel Callback');
+			receiveChannel = event.channel;
+			receiveChannel.onmessage = handleMessage;
+			receiveChannel.onopen = handleReceiveChannelStateChange;
+			receiveChannel.onclose = handleReceiveChannelStateChange;
+		}
+
+		function handleMessage(event) {
+			trace('Mensaje recibido: ' + event.data);
+			document.getElementById("dataChannelReceive").value = event.data;
+		}
+
+		function handleSendChannelStateChange() {
+			var readyState = sendChannel.readyState;
+			trace('Estado del canal de envio es: ' + readyState);
+			if (readyState == "open") {
+				dataChannelSend.disabled = false;
+				dataChannelSend.focus();
+				dataChannelSend.placeholder = "";
+				sendButton.disabled = false;
+				closeButton.disabled = false;
+			} else {
+				dataChannelSend.disabled = true;
+				sendButton.disabled = true;
+				closeButton.disabled = true;
+			}
+		}
+
+		function handleReceiveChannelStateChange() {
+			var readyState = receiveChannel.readyState;
+			trace('Estado del canal de recibido es: ' + readyState);
 		}
 	</script>
 
