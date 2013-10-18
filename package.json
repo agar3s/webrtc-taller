@@ -1,0 +1,15 @@
+{
+  "name": "webrtc-taller",
+  "version": "0.0.1",
+  "description": "Taller de WebRTC para jsconf",
+  "main": "app.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agar3s/webrtc-taller"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "connect":"~2.9.1"
+    
+  }
+}
